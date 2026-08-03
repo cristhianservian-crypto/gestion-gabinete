@@ -93,13 +93,13 @@ def calcular_estado_automatico(fecha_derivacion_str, estado_actual):
     else:
         return "VENCIDO", dias_transcurridos
 
+# Lista de Direcciones Generales / Unidades por siglas
 AREAS_LIST = [
-    "Dirección General de Mipymes",
-    "Dirección de Capacitación y Competitividad",
-    "Dirección de Financiamiento",
-    "Dirección de Formalización y Registro",
-    "Asesoría Jurídica del Viceministerio",
-    "Coordinación Administrativa",
+    "DGFR",
+    "DGI",
+    "DGFI",
+    "DINAEM",
+    "DGCGAT",
     "Otra Área / Externa"
 ]
 
