@@ -26,17 +26,22 @@ st.markdown("""
     }
     .header-title { font-size: 25px; font-weight: 700; margin: 0; }
     .header-subtitle { font-size: 14px; color: #e0e0e0; margin-top: 4px; }
+    
+    /* TARJETAS DE MÉTRICAS / KPIS */
     .kpi-card {
         background-color: #ffffff; border-radius: 10px; padding: 16px 20px;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); border: 1px solid #e1e8ed;
-        border-top: 4px solid #002855; text-align: center;
+        border-top: 4px solid #002855; text-align: center; margin-bottom: 10px;
     }
-    .kpi-card-danger { border-top: 4px solid #d9534f !important; }
-    .kpi-card-warning { border-top: 4px solid #f0ad4e !important; }
-    .kpi-card-success { border-top: 4px solid #5cb85c !important; }
+    .kpi-card-info { border-top: 4px solid #0284c7 !important; }
+    .kpi-card-success { border-top: 4px solid #16a34a !important; }
+    .kpi-card-warning { border-top: 4px solid #d97706 !important; }
+    .kpi-card-danger { border-top: 4px solid #dc2626 !important; }
+    
     .kpi-title { font-size: 13px; font-weight: 600; color: #6c757d; text-transform: uppercase; margin-bottom: 6px; }
     .kpi-value { font-size: 28px; font-weight: 800; color: #1a252f; margin: 0; }
     .kpi-subtext { font-size: 11px; color: #8c9ba5; margin-top: 4px; }
+    
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] { border-radius: 8px 8px 0px 0px; padding: 10px 20px; background-color: #e2e8f0; font-weight: 600; color: #334155; }
     .stTabs [aria-selected="true"] { background-color: #0f172a !important; color: white !important; }
@@ -158,14 +163,26 @@ with tab1:
             df_filtrado = df_pendientes.copy()
             if filtro_area: df_filtrado = df_filtrado[df_filtrado["area_derivada"].isin(filtro_area)]
             if filtro_estado: df_filtrado = df_filtrado[df_filtrado["Estado_Dinamico"].isin(filtro_estado)]
-            if filtro_prio: df_filtrado = df_filtrado[df_filtrado["prioridad"].isin(filtro_prio)]
+            if filtro_prio: df_filtrado = df_filtrado[filtro_prio]
                 
             st.markdown("---")
+            
+            # KPIS DE BANDEJA MEJORADOS CON DISEÑO HTML/CSS
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Pendientes Totales", len(df_pendientes))
-            c2.metric("🟢 En Plazo", len(df_pendientes[df_pendientes["Estado_Dinamico"] == "EN PLAZO"]))
-            c3.metric("🟡 En Seguimiento", len(df_pendientes[df_pendientes["Estado_Dinamico"] == "SEGUIMIENTO"]))
-            c4.metric("🔴 Vencidos", len(df_pendientes[df_pendientes["Estado_Dinamico"] == "VENCIDO"]))
+            tot_pend = len(df_pendientes)
+            tot_plazo = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "EN PLAZO"])
+            tot_seg = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "SEGUIMIENTO"])
+            tot_venc = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "VENCIDO"])
+            
+            with c1:
+                st.markdown(f'<div class="kpi-card kpi-card-info"><div class="kpi-title">📋 Pendientes Totales</div><div class="kpi-value">{tot_pend}</div><div class="kpi-subtext">Trámites activos</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="kpi-card kpi-card-success"><div class="kpi-title">✅ En Plazo</div><div class="kpi-value">{tot_plazo}</div><div class="kpi-subtext">≤ 3 días</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="kpi-card kpi-card-warning"><div class="kpi-title">⚠️ En Seguimiento</div><div class="kpi-value">{tot_seg}</div><div class="kpi-subtext">4 a 8 días</div></div>', unsafe_allow_html=True)
+            with c4:
+                st.markdown(f'<div class="kpi-card kpi-card-danger"><div class="kpi-title">🚨 Vencidos</div><div class="kpi-value">{tot_venc}</div><div class="kpi-subtext">> 8 días</div></div>', unsafe_allow_html=True)
+                
             st.markdown("---")
             
             if st.session_state.edit_id is not None:
@@ -339,15 +356,15 @@ with tab3:
             promedio_dias = round(df_dash[df_dash["estado"] != "FINIQUITADO"]["Dias_Transcurridos"].mean(), 1) if tot_pendientes > 0 else 0
             
             k1, k2, k3, k4, k5 = st.columns(5)
-            with k1: st.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Trámites</div><div class="kpi-value">{total_casos}</div><div class="kpi-subtext">Casos registrados</div></div>', unsafe_allow_html=True)
-            with k2: st.markdown(f'<div class="kpi-card kpi-card-success"><div class="kpi-title">Finiquitados</div><div class="kpi-value">{tot_finiquitados}</div><div class="kpi-subtext">{pct_eficiencia}% efectividad</div></div>', unsafe_allow_html=True)
-            with k3: st.markdown(f'<div class="kpi-card kpi-card-warning"><div class="kpi-title">Pendientes</div><div class="kpi-value">{tot_pendientes}</div><div class="kpi-subtext">En gestión</div></div>', unsafe_allow_html=True)
-            with k4: st.markdown(f'<div class="kpi-card kpi-card-danger"><div class="kpi-title">Vencidos</div><div class="kpi-value">{tot_vencidos}</div><div class="kpi-subtext">> 8 días</div></div>', unsafe_allow_html=True)
-            with k5: st.markdown(f'<div class="kpi-card"><div class="kpi-title">Prom. Espera</div><div class="kpi-value">{promedio_dias}</div><div class="kpi-subtext">Días acumulados</div></div>', unsafe_allow_html=True)
+            with k1: st.markdown(f'<div class="kpi-card kpi-card-info"><div class="kpi-title">📋 Total Trámites</div><div class="kpi-value">{total_casos}</div><div class="kpi-subtext">Casos registrados</div></div>', unsafe_allow_html=True)
+            with k2: st.markdown(f'<div class="kpi-card kpi-card-success"><div class="kpi-title">🎉 Finiquitados</div><div class="kpi-value">{tot_finiquitados}</div><div class="kpi-subtext">{pct_eficiencia}% efectividad</div></div>', unsafe_allow_html=True)
+            with k3: st.markdown(f'<div class="kpi-card kpi-card-warning"><div class="kpi-title">⏳ Pendientes</div><div class="kpi-value">{tot_pendientes}</div><div class="kpi-subtext">En gestión</div></div>', unsafe_allow_html=True)
+            with k4: st.markdown(f'<div class="kpi-card kpi-card-danger"><div class="kpi-title">🚨 Vencidos</div><div class="kpi-value">{tot_vencidos}</div><div class="kpi-subtext">> 8 días</div></div>', unsafe_allow_html=True)
+            with k5: st.markdown(f'<div class="kpi-card"><div class="kpi-title">⏱️ Prom. Espera</div><div class="kpi-value">{promedio_dias}</div><div class="kpi-subtext">Días acumulados</div></div>', unsafe_allow_html=True)
                 
             st.markdown("---")
             col_chart1, col_chart2 = st.columns([1, 1])
-            color_map = {"FINIQUITADO": "#2ea44f", "EN PLAZO": "#2563eb", "SEGUIMIENTO": "#f59e0b", "VENCIDO": "#dc2626"}
+            color_map = {"FINIQUITADO": "#16a34a", "EN PLAZO": "#2563eb", "SEGUIMIENTO": "#d97706", "VENCIDO": "#dc2626"}
             
             with col_chart1:
                 st.markdown("###### 🍩 **Distribución por Estado (Gráfico de Dona)**")
