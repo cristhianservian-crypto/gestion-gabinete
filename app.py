@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import plotly.express as px
+from sqlalchemy import create_engine, text
 from io import BytesIO
 from datetime import datetime, date
 
@@ -325,44 +325,80 @@ def estilo_grafico(fig, alto=330, leyenda=True):
 # =========================================================
 # BASE DE DATOS
 # =========================================================
-DB_NAME = "gestion_correos.db"
+DB_LOCAL = "sqlite:///gestion_correos.db"
+
+def _url_base():
+    """Usa Postgres si hay un secreto configurado, si no cae a SQLite local."""
+    try:
+        url = st.secrets["db_url"]
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        return url
+    except (KeyError, FileNotFoundError):
+        return DB_LOCAL
+
+@st.cache_resource(show_spinner=False)
+def get_engine():
+    url = _url_base()
+    if url.startswith("sqlite"):
+        return create_engine(url, connect_args={"check_same_thread": False})
+    return create_engine(url, pool_pre_ping=True, pool_recycle=280)
+
+ENGINE = get_engine()
+ES_POSTGRES = ENGINE.dialect.name == "postgresql"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS correos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mesa_entrada TEXT,
-            remitente TEXT NOT NULL,
-            asunto TEXT NOT NULL,
-            tipo_documento TEXT DEFAULT 'Correo Electrónico',
-            area_derivada TEXT NOT NULL,
-            prioridad TEXT DEFAULT 'Normal',
-            registrado_por TEXT,
-            fecha_derivacion DATE NOT NULL,
-            estado TEXT NOT NULL DEFAULT 'PENDIENTE',
-            fecha_finiquito DATE,
-            observaciones TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    if ES_POSTGRES:
+        ddl = """
+            CREATE TABLE IF NOT EXISTS correos (
+                id SERIAL PRIMARY KEY,
+                mesa_entrada TEXT,
+                remitente TEXT NOT NULL,
+                asunto TEXT NOT NULL,
+                tipo_documento TEXT DEFAULT 'Correo Electrónico',
+                area_derivada TEXT NOT NULL,
+                prioridad TEXT DEFAULT 'Normal',
+                registrado_por TEXT,
+                fecha_derivacion DATE NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+                fecha_finiquito DATE,
+                observaciones TEXT
+            )
+        """
+    else:
+        ddl = """
+            CREATE TABLE IF NOT EXISTS correos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mesa_entrada TEXT,
+                remitente TEXT NOT NULL,
+                asunto TEXT NOT NULL,
+                tipo_documento TEXT DEFAULT 'Correo Electrónico',
+                area_derivada TEXT NOT NULL,
+                prioridad TEXT DEFAULT 'Normal',
+                registrado_por TEXT,
+                fecha_derivacion DATE NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+                fecha_finiquito DATE,
+                observaciones TEXT
+            )
+        """
+    with ENGINE.begin() as conn:
+        conn.execute(text(ddl))
 
 init_db()
 
 def cargar_datos():
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT * FROM correos", conn)
-    conn.close()
+    df = pd.read_sql_query(text("SELECT * FROM correos ORDER BY id"), ENGINE)
+    # Normalizo las fechas a texto AAAA-MM-DD, porque Postgres devuelve objetos date
+    for col in ("fecha_derivacion", "fecha_finiquito"):
+        if col in df.columns:
+            serie = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+            df[col] = serie.astype(object).where(serie.notna(), None)
     return df
 
-def ejecutar(sql, params=()):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(sql, params)
-    conn.commit()
-    conn.close()
+def ejecutar(sql, params=None):
+    with ENGINE.begin() as conn:
+        conn.execute(text(sql), params or {})
 
 def calcular_estado_automatico(fecha_derivacion_str, estado_actual):
     if estado_actual == "FINIQUITADO":
@@ -408,6 +444,52 @@ MESES_ESP = {
 hoy = date.today()
 fecha_larga = f"{hoy.day:02d} de {MESES_ESP[hoy.month].lower()} de {hoy.year}"
 
+# ---------------------------------------------------------
+# CONTROL DE ACCESO
+# Los usuarios se definen en los secretos de Streamlit, bajo [usuarios].
+# Si no hay ninguno configurado, la app abre sin login (modo local).
+# ---------------------------------------------------------
+def usuarios_configurados():
+    try:
+        return dict(st.secrets["usuarios"])
+    except (KeyError, FileNotFoundError):
+        return {}
+
+USUARIOS = usuarios_configurados()
+
+if "usuario" not in st.session_state:
+    st.session_state.usuario = None if USUARIOS else "local"
+
+if st.session_state.usuario is None:
+    st.markdown("""
+    <div class="app-header" style="justify-content:center; text-align:center;">
+        <div class="brand" style="flex-direction:column; gap:12px;">
+            <div class="brand-mark">VM</div>
+            <div>
+                <div class="brand-kicker">Gabinete · Viceministerio de Mipymes</div>
+                <div class="brand-title">Sistema de Control de Gestión y Derivaciones</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, col_login, _ = st.columns([1, 1.2, 1])
+    with col_login:
+        with st.container(border=True):
+            st.markdown('<div class="section-eyebrow">Acceso restringido</div>'
+                        '<div class="section-title">Iniciar sesión</div>'
+                        '<div class="section-sub">Uso exclusivo del equipo de Gabinete.</div>',
+                        unsafe_allow_html=True)
+            usuario_in = st.text_input("Usuario", key="login_user")
+            clave_in = st.text_input("Contraseña", type="password", key="login_pass")
+            if st.button("Ingresar", type="primary", use_container_width=True):
+                if USUARIOS.get(usuario_in.strip()) == clave_in:
+                    st.session_state.usuario = usuario_in.strip()
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
+    st.stop()
+
 df = cargar_datos()
 total_registros = len(df)
 
@@ -430,9 +512,21 @@ st.markdown(f"""
             <span class="meta-label">Trámites en base</span>
             <span class="meta-value">{total_registros}</span>
         </div>
+        <div class="meta-rule"></div>
+        <div class="meta-item">
+            <span class="meta-label">Sesión</span>
+            <span class="meta-value">{st.session_state.usuario}</span>
+        </div>
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+if USUARIOS:
+    _, col_salir = st.columns([6, 1])
+    with col_salir:
+        if st.button("Cerrar sesión", use_container_width=True):
+            st.session_state.usuario = None
+            st.rerun()
 
 if "edit_id" not in st.session_state:
     st.session_state.edit_id = None
@@ -563,14 +657,18 @@ with tab1:
                 with btn_c1:
                     if st.button("Guardar cambios", type="primary", use_container_width=True):
                         ejecutar("""
-                            UPDATE correos SET remitente = ?, asunto = ?, tipo_documento = ?, mesa_entrada = ?,
-                            area_derivada = ?, prioridad = ?, fecha_derivacion = ?, registrado_por = ?, observaciones = ?
-                            WHERE id = ?
-                        """, (edit_remitente, edit_asunto, edit_tipo, edit_mesa, edit_area, edit_prioridad,
-                              edit_fecha.strftime("%Y-%m-%d"), edit_registrado, edit_obs, int(row_e['id'])))
+                            UPDATE correos SET remitente = :remitente, asunto = :asunto,
+                            tipo_documento = :tipo, mesa_entrada = :mesa, area_derivada = :area,
+                            prioridad = :prioridad, fecha_derivacion = :fecha,
+                            registrado_por = :registrado, observaciones = :obs
+                            WHERE id = :id
+                        """, {"remitente": edit_remitente, "asunto": edit_asunto, "tipo": edit_tipo,
+                              "mesa": edit_mesa, "area": edit_area, "prioridad": edit_prioridad,
+                              "fecha": edit_fecha, "registrado": edit_registrado,
+                              "obs": edit_obs, "id": int(row_e['id'])})
                         if edit_fecha_fin is not None:
-                            ejecutar("UPDATE correos SET fecha_finiquito = ? WHERE id = ?",
-                                     (edit_fecha_fin.strftime("%Y-%m-%d"), int(row_e['id'])))
+                            ejecutar("UPDATE correos SET fecha_finiquito = :ffin WHERE id = :id",
+                                     {"ffin": edit_fecha_fin, "id": int(row_e['id'])})
                         st.session_state.edit_id = None
                         st.rerun()
                 with btn_c2:
@@ -632,19 +730,19 @@ with tab1:
                     with col3:
                         if cerrado:
                             if st.button("Reabrir trámite", key=f"reab_{row['id']}", use_container_width=True):
-                                ejecutar("UPDATE correos SET estado = 'PENDIENTE', fecha_finiquito = NULL WHERE id = ?",
-                                         (int(row['id']),))
+                                ejecutar("UPDATE correos SET estado = 'PENDIENTE', fecha_finiquito = NULL WHERE id = :id",
+                                         {"id": int(row['id'])})
                                 st.rerun()
                         else:
                             if st.button("Finiquitar", key=f"fin_{row['id']}", type="primary", use_container_width=True):
-                                ejecutar("UPDATE correos SET estado = 'FINIQUITADO', fecha_finiquito = ? WHERE id = ?",
-                                         (date.today().strftime("%Y-%m-%d"), int(row['id'])))
+                                ejecutar("UPDATE correos SET estado = 'FINIQUITADO', fecha_finiquito = :ffin WHERE id = :id",
+                                         {"ffin": date.today(), "id": int(row['id'])})
                                 st.rerun()
                         if st.button("Editar", key=f"btn_edit_{row['id']}", use_container_width=True):
                             st.session_state.edit_id = row['id']
                             st.rerun()
                         if st.button("Eliminar", key=f"del_{row['id']}", use_container_width=True):
-                            ejecutar("DELETE FROM correos WHERE id = ?", (int(row['id']),))
+                            ejecutar("DELETE FROM correos WHERE id = :id", {"id": int(row['id'])})
                             st.rerun()
 
 # =========================================================
@@ -675,9 +773,11 @@ with tab2:
                 ejecutar("""
                     INSERT INTO correos (mesa_entrada, remitente, asunto, tipo_documento, area_derivada,
                     prioridad, registrado_por, fecha_derivacion, estado, observaciones)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?)
-                """, (mesa_entrada, remitente, asunto, tipo_documento, area_derivada, prioridad,
-                      registrado_por, fecha_derivacion.strftime("%Y-%m-%d"), observaciones))
+                    VALUES (:mesa, :remitente, :asunto, :tipo, :area, :prioridad, :registrado,
+                            :fecha, 'PENDIENTE', :obs)
+                """, {"mesa": mesa_entrada, "remitente": remitente, "asunto": asunto,
+                      "tipo": tipo_documento, "area": area_derivada, "prioridad": prioridad,
+                      "registrado": registrado_por, "fecha": fecha_derivacion, "obs": observaciones})
                 st.success("Trámite registrado y derivado. Ya figura en la bandeja de derivaciones.")
                 st.rerun()
             else:
