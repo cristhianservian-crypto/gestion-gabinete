@@ -379,6 +379,17 @@ def calcular_estado_automatico(fecha_derivacion_str, estado_actual):
     else:
         return "VENCIDO", dias_transcurridos
 
+def dias_de_resolucion(row):
+    """Días que tardó un trámite finiquitado entre su derivación y su cierre."""
+    if row.get("estado") != "FINIQUITADO" or not row.get("fecha_finiquito"):
+        return 0
+    try:
+        f_ini = datetime.strptime(str(row["fecha_derivacion"]), "%Y-%m-%d").date()
+        f_fin = datetime.strptime(str(row["fecha_finiquito"]), "%Y-%m-%d").date()
+        return max((f_fin - f_ini).days, 0)
+    except (ValueError, TypeError):
+        return 0
+
 AREAS_LIST = ["DGFR", "DGI", "DGFI", "DINAEM", "DGCGAT", "Otra Área / Externa"]
 TIPOS_DOC = ["Correo Electrónico", "Nota Oficial", "Nota Externa",
              "Informe Técnico", "Directiva / Resolución", "Otro"]
@@ -437,152 +448,204 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: BANDEJA DE DERIVACIONES
 # =========================================================
 with tab1:
-    seccion("Control de plazos", "Casos activos",
-            "Los trámites se clasifican automáticamente: hasta 3 días en plazo, de 4 a 8 días en seguimiento, más de 8 días vencido.")
+    seccion("Control de plazos", "Casos activos y finiquitados",
+            "Hasta 3 días en plazo, de 4 a 8 días en seguimiento, más de 8 días vencido. "
+            "Por defecto se listan los pendientes: para revisar o editar los cerrados, elegí FINIQUITADO en el filtro de estado.")
 
     if df.empty:
         st.info("Todavía no hay trámites cargados. Registrá el primero en la pestaña **Registrar derivación**.")
     else:
-        df_pendientes = df[df["estado"] != "FINIQUITADO"].copy()
+        df_bandeja = df.copy()
+        estados_calculados, dias_list, dias_cierre = [], [], []
+        for _, row in df_bandeja.iterrows():
+            st_calc, dias = calcular_estado_automatico(row["fecha_derivacion"], row["estado"])
+            estados_calculados.append(st_calc)
+            dias_list.append(dias)
+            dias_cierre.append(dias_de_resolucion(row))
+        df_bandeja["Estado_Dinamico"] = estados_calculados
+        df_bandeja["Dias_Transcurridos"] = dias_list
+        df_bandeja["Dias_Resolucion"] = dias_cierre
 
-        if df_pendientes.empty:
-            st.success("No quedan trámites pendientes. Toda la mesa está finiquitada.")
+        df_pendientes = df_bandeja[df_bandeja["Estado_Dinamico"] != "FINIQUITADO"]
+        df_cerrados = df_bandeja[df_bandeja["Estado_Dinamico"] == "FINIQUITADO"]
+
+        # KPIs de la bandeja
+        tot_pend = len(df_pendientes)
+        tot_plazo = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "EN PLAZO"])
+        tot_seg = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "SEGUIMIENTO"])
+        tot_venc = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "VENCIDO"])
+        tot_fin = len(df_cerrados)
+        prom_cierre = round(df_cerrados["Dias_Resolucion"].mean(), 1) if tot_fin > 0 else 0
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            st.markdown(kpi("Pendientes totales", tot_pend, "Trámites activos en gestión", "info"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(kpi("En plazo", tot_plazo, "Hasta 3 días de derivados", "ok"), unsafe_allow_html=True)
+        with c3:
+            st.markdown(kpi("En seguimiento", tot_seg, "Entre 4 y 8 días", "warn"), unsafe_allow_html=True)
+        with c4:
+            st.markdown(kpi("Vencidos", tot_venc, "Más de 8 días sin respuesta", "danger"), unsafe_allow_html=True)
+        with c5:
+            st.markdown(kpi("Finiquitados", tot_fin, f"Cierre promedio: {prom_cierre} día(s)", "gold"), unsafe_allow_html=True)
+
+        st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+
+        # Filtros
+        with st.container(border=True):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                filtro_area = st.multiselect("Dirección o área", options=sorted(df_bandeja["area_derivada"].unique()))
+            with col_f2:
+                filtro_estado = st.multiselect(
+                    "Estado del plazo",
+                    options=["EN PLAZO", "SEGUIMIENTO", "VENCIDO", "FINIQUITADO"],
+                    help="Sin selección se muestran solo los pendientes. Elegí FINIQUITADO para ver los trámites ya cerrados."
+                )
+            with col_f3:
+                filtro_prio = st.multiselect("Prioridad", options=PRIORIDADES)
+
+        if filtro_estado:
+            df_filtrado = df_bandeja[df_bandeja["Estado_Dinamico"].isin(filtro_estado)].copy()
         else:
-            estados_calculados, dias_list = [], []
-            for _, row in df_pendientes.iterrows():
-                st_calc, dias = calcular_estado_automatico(row["fecha_derivacion"], row["estado"])
-                estados_calculados.append(st_calc)
-                dias_list.append(dias)
-            df_pendientes["Estado_Dinamico"] = estados_calculados
-            df_pendientes["Dias_Transcurridos"] = dias_list
-
-            # KPIs de la bandeja
-            tot_pend = len(df_pendientes)
-            tot_plazo = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "EN PLAZO"])
-            tot_seg = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "SEGUIMIENTO"])
-            tot_venc = len(df_pendientes[df_pendientes["Estado_Dinamico"] == "VENCIDO"])
-
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                st.markdown(kpi("Pendientes totales", tot_pend, "Trámites activos en gestión", "info"), unsafe_allow_html=True)
-            with c2:
-                st.markdown(kpi("En plazo", tot_plazo, "Hasta 3 días de derivados", "ok"), unsafe_allow_html=True)
-            with c3:
-                st.markdown(kpi("En seguimiento", tot_seg, "Entre 4 y 8 días", "warn"), unsafe_allow_html=True)
-            with c4:
-                st.markdown(kpi("Vencidos", tot_venc, "Más de 8 días sin respuesta", "danger"), unsafe_allow_html=True)
-
-            st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-
-            # Filtros
-            with st.container(border=True):
-                col_f1, col_f2, col_f3 = st.columns(3)
-                with col_f1:
-                    filtro_area = st.multiselect("Dirección o área", options=sorted(df_pendientes["area_derivada"].unique()))
-                with col_f2:
-                    filtro_estado = st.multiselect("Estado del plazo", options=["EN PLAZO", "SEGUIMIENTO", "VENCIDO"])
-                with col_f3:
-                    filtro_prio = st.multiselect("Prioridad", options=PRIORIDADES)
-
             df_filtrado = df_pendientes.copy()
-            if filtro_area:
-                df_filtrado = df_filtrado[df_filtrado["area_derivada"].isin(filtro_area)]
-            if filtro_estado:
-                df_filtrado = df_filtrado[df_filtrado["Estado_Dinamico"].isin(filtro_estado)]
-            if filtro_prio:
-                df_filtrado = df_filtrado[df_filtrado["prioridad"].isin(filtro_prio)]
 
-            df_filtrado = df_filtrado.sort_values("Dias_Transcurridos", ascending=False)
+        if filtro_area:
+            df_filtrado = df_filtrado[df_filtrado["area_derivada"].isin(filtro_area)]
+        if filtro_prio:
+            df_filtrado = df_filtrado[df_filtrado["prioridad"].isin(filtro_prio)]
 
-            # Panel de edición
-            if st.session_state.edit_id is not None:
-                registro_editar = df[df["id"] == st.session_state.edit_id]
-                if not registro_editar.empty:
-                    row_e = registro_editar.iloc[0]
-                    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-                    seccion("Edición", f"Trámite N° {row_e['id']}", row_e['asunto'])
+        if not df_filtrado.empty:
+            df_filtrado["_orden"] = (df_filtrado["Estado_Dinamico"] == "FINIQUITADO").astype(int)
+            df_filtrado = df_filtrado.sort_values(
+                ["_orden", "Dias_Transcurridos", "fecha_finiquito"],
+                ascending=[True, False, False]
+            )
 
-                    col_e1, col_e2 = st.columns(2)
-                    with col_e1:
-                        edit_remitente = st.text_input("Remitente", value=str(row_e['remitente']), key="e_rem")
-                        edit_asunto = st.text_input("Asunto", value=str(row_e['asunto']), key="e_asu")
-                        idx_tipo = TIPOS_DOC.index(row_e['tipo_documento']) if row_e.get('tipo_documento') in TIPOS_DOC else 0
-                        edit_tipo = st.selectbox("Tipo de documento", TIPOS_DOC, index=idx_tipo, key="e_tip")
-                        edit_mesa = st.text_input("N° de mesa de entrada o referencia", value=str(row_e.get('mesa_entrada') or ''), key="e_mes")
-                    with col_e2:
-                        idx_area = AREAS_LIST.index(row_e['area_derivada']) if row_e['area_derivada'] in AREAS_LIST else 0
-                        edit_area = st.selectbox("Dirección o área derivada", AREAS_LIST, index=idx_area, key="e_are")
-                        idx_prio = PRIORIDADES.index(row_e.get('prioridad', 'Normal')) if row_e.get('prioridad') in PRIORIDADES else 0
-                        edit_prioridad = st.radio("Prioridad", PRIORIDADES, index=idx_prio, horizontal=True, key="e_pri")
-                        f_date = datetime.strptime(str(row_e['fecha_derivacion']), "%Y-%m-%d").date() if isinstance(row_e['fecha_derivacion'], str) else row_e['fecha_derivacion']
-                        edit_fecha = st.date_input("Fecha de derivación", value=f_date, key="e_fec")
-                        idx_resp = RESPONSABLES.index(row_e.get('registrado_por')) if row_e.get('registrado_por') in RESPONSABLES else 0
-                        edit_registrado = st.selectbox("Registrado por", RESPONSABLES, index=idx_resp, key="e_res")
+        # Panel de edición
+        if st.session_state.edit_id is not None:
+            registro_editar = df[df["id"] == st.session_state.edit_id]
+            if not registro_editar.empty:
+                row_e = registro_editar.iloc[0]
+                st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+                estado_e = "trámite finiquitado" if row_e["estado"] == "FINIQUITADO" else "trámite pendiente"
+                seccion("Edición", f"Trámite N° {row_e['id']}", f"{row_e['asunto']} · {estado_e}")
 
-                    edit_obs = st.text_area("Observaciones", value=str(row_e['observaciones'] or ''), key="e_obs")
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    edit_remitente = st.text_input("Remitente", value=str(row_e['remitente']), key="e_rem")
+                    edit_asunto = st.text_input("Asunto", value=str(row_e['asunto']), key="e_asu")
+                    idx_tipo = TIPOS_DOC.index(row_e['tipo_documento']) if row_e.get('tipo_documento') in TIPOS_DOC else 0
+                    edit_tipo = st.selectbox("Tipo de documento", TIPOS_DOC, index=idx_tipo, key="e_tip")
+                    edit_mesa = st.text_input("N° de mesa de entrada o referencia", value=str(row_e.get('mesa_entrada') or ''), key="e_mes")
+                with col_e2:
+                    idx_area = AREAS_LIST.index(row_e['area_derivada']) if row_e['area_derivada'] in AREAS_LIST else 0
+                    edit_area = st.selectbox("Dirección o área derivada", AREAS_LIST, index=idx_area, key="e_are")
+                    idx_prio = PRIORIDADES.index(row_e.get('prioridad', 'Normal')) if row_e.get('prioridad') in PRIORIDADES else 0
+                    edit_prioridad = st.radio("Prioridad", PRIORIDADES, index=idx_prio, horizontal=True, key="e_pri")
+                    f_date = datetime.strptime(str(row_e['fecha_derivacion']), "%Y-%m-%d").date() if isinstance(row_e['fecha_derivacion'], str) else row_e['fecha_derivacion']
+                    edit_fecha = st.date_input("Fecha de derivación", value=f_date, key="e_fec")
+                    idx_resp = RESPONSABLES.index(row_e.get('registrado_por')) if row_e.get('registrado_por') in RESPONSABLES else 0
+                    edit_registrado = st.selectbox("Registrado por", RESPONSABLES, index=idx_resp, key="e_res")
 
-                    btn_c1, btn_c2, _ = st.columns([1, 1, 3])
-                    with btn_c1:
-                        if st.button("Guardar cambios", type="primary", use_container_width=True):
-                            ejecutar("""
-                                UPDATE correos SET remitente = ?, asunto = ?, tipo_documento = ?, mesa_entrada = ?,
-                                area_derivada = ?, prioridad = ?, fecha_derivacion = ?, registrado_por = ?, observaciones = ?
-                                WHERE id = ?
-                            """, (edit_remitente, edit_asunto, edit_tipo, edit_mesa, edit_area, edit_prioridad,
-                                  edit_fecha.strftime("%Y-%m-%d"), edit_registrado, edit_obs, int(row_e['id'])))
-                            st.session_state.edit_id = None
-                            st.rerun()
-                    with btn_c2:
-                        if st.button("Cancelar", use_container_width=True):
-                            st.session_state.edit_id = None
-                            st.rerun()
-                    st.markdown("---")
+                edit_obs = st.text_area("Observaciones", value=str(row_e['observaciones'] or ''), key="e_obs")
 
-            # Listado de trámites
-            st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-            marcador = {"EN PLAZO": "🟢", "SEGUIMIENTO": "🟡", "VENCIDO": "🔴"}
+                # Si el trámite está finiquitado, también se puede corregir la fecha de cierre
+                edit_fecha_fin = None
+                if row_e["estado"] == "FINIQUITADO":
+                    try:
+                        f_fin_val = datetime.strptime(str(row_e["fecha_finiquito"]), "%Y-%m-%d").date()
+                    except (ValueError, TypeError):
+                        f_fin_val = date.today()
+                    edit_fecha_fin = st.date_input("Fecha de finiquito", value=f_fin_val, key="e_ffin")
 
-            if df_filtrado.empty:
+                btn_c1, btn_c2, _ = st.columns([1, 1, 3])
+                with btn_c1:
+                    if st.button("Guardar cambios", type="primary", use_container_width=True):
+                        ejecutar("""
+                            UPDATE correos SET remitente = ?, asunto = ?, tipo_documento = ?, mesa_entrada = ?,
+                            area_derivada = ?, prioridad = ?, fecha_derivacion = ?, registrado_por = ?, observaciones = ?
+                            WHERE id = ?
+                        """, (edit_remitente, edit_asunto, edit_tipo, edit_mesa, edit_area, edit_prioridad,
+                              edit_fecha.strftime("%Y-%m-%d"), edit_registrado, edit_obs, int(row_e['id'])))
+                        if edit_fecha_fin is not None:
+                            ejecutar("UPDATE correos SET fecha_finiquito = ? WHERE id = ?",
+                                     (edit_fecha_fin.strftime("%Y-%m-%d"), int(row_e['id'])))
+                        st.session_state.edit_id = None
+                        st.rerun()
+                with btn_c2:
+                    if st.button("Cancelar", use_container_width=True):
+                        st.session_state.edit_id = None
+                        st.rerun()
+                st.markdown("---")
+
+        # Listado de trámites
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        marcador = {"EN PLAZO": "🟢", "SEGUIMIENTO": "🟡", "VENCIDO": "🔴", "FINIQUITADO": "✅"}
+
+        if df_filtrado.empty:
+            if filtro_area or filtro_estado or filtro_prio:
                 st.warning("Ningún trámite coincide con los filtros aplicados.")
             else:
-                for _, row in df_filtrado.iterrows():
-                    mesa_val = row.get('mesa_entrada', '')
-                    ref_doc = f"Ref. {mesa_val}  ·  " if mesa_val else ""
-                    titulo = (
-                        f"{marcador.get(row['Estado_Dinamico'], '')}  {row['asunto']}"
-                        f"     ·     {ref_doc}{row['area_derivada']}"
-                        f"  ·  {row['Estado_Dinamico']} · {row['Dias_Transcurridos']} día(s)"
-                    )
-                    with st.expander(titulo):
-                        col1, col2, col3 = st.columns([2, 2, 1])
-                        with col1:
-                            st.markdown(
-                                campo("Remitente", row['remitente']) +
-                                campo("Tipo de documento", row.get('tipo_documento', 'Correo Electrónico')) +
-                                campo("Observaciones", row['observaciones'] or "Sin observaciones registradas."),
-                                unsafe_allow_html=True
-                            )
-                        with col2:
-                            st.markdown(
-                                campo("Dirección o área", row['area_derivada']) +
-                                campo("Fecha de derivación", row['fecha_derivacion']) +
-                                campo("Registrado por", row.get('registrado_por', 'Gabinete')) +
-                                f'<div class="field-label">Situación</div><div class="field-value">'
-                                f'{tag(row["Estado_Dinamico"])} &nbsp; <span style="color:#64748B">'
-                                f'{row["Dias_Transcurridos"]} día(s) · prioridad {row.get("prioridad", "Normal")}</span></div>',
-                                unsafe_allow_html=True
-                            )
-                        with col3:
+                st.success("No quedan trámites pendientes. Para revisar los cerrados, elegí FINIQUITADO en el filtro de estado.")
+        else:
+            for _, row in df_filtrado.iterrows():
+                cerrado = row["Estado_Dinamico"] == "FINIQUITADO"
+                mesa_val = row.get('mesa_entrada', '')
+                ref_doc = f"Ref. {mesa_val}  ·  " if mesa_val else ""
+                cierre_txt = (f"FINIQUITADO · resuelto en {row['Dias_Resolucion']} día(s)"
+                              if cerrado else
+                              f"{row['Estado_Dinamico']} · {row['Dias_Transcurridos']} día(s)")
+                titulo = (
+                    f"{marcador.get(row['Estado_Dinamico'], '')}  {row['asunto']}"
+                    f"     ·     {ref_doc}{row['area_derivada']}"
+                    f"  ·  {cierre_txt}"
+                )
+                with st.expander(titulo):
+                    col1, col2, col3 = st.columns([2, 2, 1])
+                    with col1:
+                        st.markdown(
+                            campo("Remitente", row['remitente']) +
+                            campo("Tipo de documento", row.get('tipo_documento', 'Correo Electrónico')) +
+                            campo("Observaciones", row['observaciones'] or "Sin observaciones registradas."),
+                            unsafe_allow_html=True
+                        )
+                    with col2:
+                        detalle_situacion = (
+                            f'{row["Dias_Resolucion"]} día(s) hasta el cierre · prioridad {row.get("prioridad", "Normal")}'
+                            if cerrado else
+                            f'{row["Dias_Transcurridos"]} día(s) · prioridad {row.get("prioridad", "Normal")}'
+                        )
+                        bloque = (
+                            campo("Dirección o área", row['area_derivada']) +
+                            campo("Fecha de derivación", row['fecha_derivacion'])
+                        )
+                        if cerrado:
+                            bloque += campo("Fecha de finiquito", row.get('fecha_finiquito') or "Sin fecha registrada")
+                        bloque += campo("Registrado por", row.get('registrado_por', 'Gabinete'))
+                        bloque += (
+                            f'<div class="field-label">Situación</div><div class="field-value">'
+                            f'{tag(row["Estado_Dinamico"])} &nbsp; <span style="color:#64748B">'
+                            f'{detalle_situacion}</span></div>'
+                        )
+                        st.markdown(bloque, unsafe_allow_html=True)
+                    with col3:
+                        if cerrado:
+                            if st.button("Reabrir trámite", key=f"reab_{row['id']}", use_container_width=True):
+                                ejecutar("UPDATE correos SET estado = 'PENDIENTE', fecha_finiquito = NULL WHERE id = ?",
+                                         (int(row['id']),))
+                                st.rerun()
+                        else:
                             if st.button("Finiquitar", key=f"fin_{row['id']}", type="primary", use_container_width=True):
                                 ejecutar("UPDATE correos SET estado = 'FINIQUITADO', fecha_finiquito = ? WHERE id = ?",
                                          (date.today().strftime("%Y-%m-%d"), int(row['id'])))
                                 st.rerun()
-                            if st.button("Editar", key=f"btn_edit_{row['id']}", use_container_width=True):
-                                st.session_state.edit_id = row['id']
-                                st.rerun()
-                            if st.button("Eliminar", key=f"del_{row['id']}", use_container_width=True):
-                                ejecutar("DELETE FROM correos WHERE id = ?", (int(row['id']),))
-                                st.rerun()
+                        if st.button("Editar", key=f"btn_edit_{row['id']}", use_container_width=True):
+                            st.session_state.edit_id = row['id']
+                            st.rerun()
+                        if st.button("Eliminar", key=f"del_{row['id']}", use_container_width=True):
+                            ejecutar("DELETE FROM correos WHERE id = ?", (int(row['id']),))
+                            st.rerun()
 
 # =========================================================
 # TAB 2: REGISTRO DE DERIVACIONES
