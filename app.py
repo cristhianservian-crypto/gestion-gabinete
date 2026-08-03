@@ -22,10 +22,8 @@ st.set_page_config(
 # Tipos:   Plus Jakarta Sans (títulos) + Inter (datos)
 # =========================================================
 st.markdown("""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 :root{
     --navy:#0E2A47;
     --navy-700:#153A5F;
@@ -233,9 +231,9 @@ label, .stRadio label, .stSelectbox label, .stMultiSelect label{
 [data-testid="stMetricValue"]{ font-family:'Plus Jakarta Sans',sans-serif; }
 
 /* ---------- PANEL DE FILTROS ---------- */
-.filter-shell{
-    background:#fff; border:1px solid var(--line); border-radius:var(--radius);
-    padding:6px 18px 2px 18px; box-shadow:var(--shadow); margin-bottom:6px;
+[data-testid="stVerticalBlockBorderWrapper"]{
+    background:#fff; border:1px solid var(--line) !important; border-radius:var(--radius) !important;
+    padding:14px 18px 2px 18px !important; box-shadow:var(--shadow);
 }
 
 /* ---------- PIE ---------- */
@@ -397,7 +395,7 @@ MESES_ESP = {
 # ENCABEZADO INSTITUCIONAL
 # =========================================================
 hoy = date.today()
-fecha_larga = f"{hoy.day:02d} de {MESES_ESP[hoy.month]} de {hoy.year}"
+fecha_larga = f"{hoy.day:02d} de {MESES_ESP[hoy.month].lower()} de {hoy.year}"
 
 df = cargar_datos()
 total_registros = len(df)
@@ -477,15 +475,14 @@ with tab1:
             st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
 
             # Filtros
-            st.markdown('<div class="filter-shell">', unsafe_allow_html=True)
-            col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                filtro_area = st.multiselect("Dirección o área", options=sorted(df_pendientes["area_derivada"].unique()))
-            with col_f2:
-                filtro_estado = st.multiselect("Estado del plazo", options=["EN PLAZO", "SEGUIMIENTO", "VENCIDO"])
-            with col_f3:
-                filtro_prio = st.multiselect("Prioridad", options=PRIORIDADES)
-            st.markdown('</div>', unsafe_allow_html=True)
+            with st.container(border=True):
+                col_f1, col_f2, col_f3 = st.columns(3)
+                with col_f1:
+                    filtro_area = st.multiselect("Dirección o área", options=sorted(df_pendientes["area_derivada"].unique()))
+                with col_f2:
+                    filtro_estado = st.multiselect("Estado del plazo", options=["EN PLAZO", "SEGUIMIENTO", "VENCIDO"])
+                with col_f3:
+                    filtro_prio = st.multiselect("Prioridad", options=PRIORIDADES)
 
             df_filtrado = df_pendientes.copy()
             if filtro_area:
@@ -647,19 +644,18 @@ with tab3:
         df_pb["Estado_Plazo"] = estados_powerbi
         df_pb["Dias_Transcurridos"] = dias_powerbi
 
-        st.markdown('<div class="filter-shell">', unsafe_allow_html=True)
-        col_f1, col_f2, col_f3 = st.columns(3)
-        with col_f1:
-            anos_disponibles = sorted(df_pb["Año"].unique().tolist(), reverse=True)
-            f_ano = st.multiselect("Año", options=anos_disponibles, default=anos_disponibles)
-        with col_f2:
-            df_m = df_pb[df_pb["Año"].isin(f_ano)] if f_ano else df_pb
-            meses_ord = df_m.sort_values("Num_Mes")["Nombre_Mes"].unique().tolist()
-            f_mes = st.multiselect("Mes", options=meses_ord, default=meses_ord)
-        with col_f3:
-            areas_disp = sorted(df_pb["area_derivada"].unique().tolist())
-            f_direccion = st.multiselect("Dirección", options=areas_disp, default=areas_disp)
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                anos_disponibles = sorted(df_pb["Año"].unique().tolist(), reverse=True)
+                f_ano = st.multiselect("Año", options=anos_disponibles, default=anos_disponibles)
+            with col_f2:
+                df_m = df_pb[df_pb["Año"].isin(f_ano)] if f_ano else df_pb
+                meses_ord = df_m.sort_values("Num_Mes")["Nombre_Mes"].unique().tolist()
+                f_mes = st.multiselect("Mes", options=meses_ord, default=meses_ord)
+            with col_f3:
+                areas_disp = sorted(df_pb["area_derivada"].unique().tolist())
+                f_direccion = st.multiselect("Dirección", options=areas_disp, default=areas_disp)
 
         df_dash = df_pb.copy()
         if f_ano:
