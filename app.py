@@ -4,6 +4,8 @@ import plotly.express as px
 from sqlalchemy import create_engine, text
 from io import BytesIO
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
+import hmac
 
 # =========================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -407,13 +409,21 @@ def calcular_estado_automatico(fecha_derivacion_str, estado_actual):
         fecha_deriv = datetime.strptime(fecha_derivacion_str, "%Y-%m-%d").date()
     else:
         fecha_deriv = fecha_derivacion_str
-    dias_transcurridos = (date.today() - fecha_deriv).days
+    dias_transcurridos = (hoy_py() - fecha_deriv).days
     if dias_transcurridos <= 3:
         return "EN PLAZO", dias_transcurridos
     elif 4 <= dias_transcurridos <= 8:
         return "SEGUIMIENTO", dias_transcurridos
     else:
         return "VENCIDO", dias_transcurridos
+
+# La app corre en un servidor con horario de Greenwich, así que la fecha
+# siempre se calcula con la zona horaria de Paraguay, nunca con la del servidor.
+TZ_PY = ZoneInfo("America/Asuncion")
+
+def hoy_py():
+    """Fecha de hoy en Paraguay, independiente de dónde esté el servidor."""
+    return datetime.now(TZ_PY).date()
 
 def dias_de_resolucion(row):
     """Días que tardó un trámite finiquitado entre su derivación y su cierre."""
@@ -441,7 +451,7 @@ MESES_ESP = {
 # =========================================================
 # ENCABEZADO INSTITUCIONAL
 # =========================================================
-hoy = date.today()
+hoy = hoy_py()
 fecha_larga = f"{hoy.day:02d} de {MESES_ESP[hoy.month].lower()} de {hoy.year}"
 
 # ---------------------------------------------------------
@@ -483,7 +493,8 @@ if st.session_state.usuario is None:
             usuario_in = st.text_input("Usuario", key="login_user")
             clave_in = st.text_input("Contraseña", type="password", key="login_pass")
             if st.button("Ingresar", type="primary", use_container_width=True):
-                if USUARIOS.get(usuario_in.strip()) == clave_in:
+                guardada = USUARIOS.get(usuario_in.strip(), "")
+                if guardada and hmac.compare_digest(str(guardada), clave_in):
                     st.session_state.usuario = usuario_in.strip()
                     st.rerun()
                 else:
@@ -583,10 +594,18 @@ with tab1:
         with c5:
             st.markdown(kpi("Finiquitados", tot_fin, f"Cierre promedio: {prom_cierre} día(s)", "gold"), unsafe_allow_html=True)
 
+        if tot_venc > 0:
+            st.warning(f"Hay {tot_venc} trámite(s) vencido(s), con más de 8 días sin respuesta. "
+                       "Filtrá por VENCIDO para revisarlos.")
+
         st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
 
         # Filtros
         with st.container(border=True):
+            busqueda = st.text_input(
+                "Buscar", placeholder="Escribí parte del asunto, del remitente o el número de mesa de entrada",
+                label_visibility="collapsed"
+            )
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
                 filtro_area = st.multiselect("Dirección o área", options=sorted(df_bandeja["area_derivada"].unique()))
@@ -608,6 +627,13 @@ with tab1:
             df_filtrado = df_filtrado[df_filtrado["area_derivada"].isin(filtro_area)]
         if filtro_prio:
             df_filtrado = df_filtrado[df_filtrado["prioridad"].isin(filtro_prio)]
+        if busqueda.strip():
+            texto = busqueda.strip().lower()
+            campos = (df_filtrado["asunto"].fillna("") + " " +
+                      df_filtrado["remitente"].fillna("") + " " +
+                      df_filtrado["mesa_entrada"].fillna("") + " " +
+                      df_filtrado["observaciones"].fillna(""))
+            df_filtrado = df_filtrado[campos.str.lower().str.contains(texto, regex=False)]
 
         if not df_filtrado.empty:
             df_filtrado["_orden"] = (df_filtrado["Estado_Dinamico"] == "FINIQUITADO").astype(int)
@@ -627,22 +653,25 @@ with tab1:
 
                 col_e1, col_e2 = st.columns(2)
                 with col_e1:
-                    edit_remitente = st.text_input("Remitente", value=str(row_e['remitente']), key="e_rem")
-                    edit_asunto = st.text_input("Asunto", value=str(row_e['asunto']), key="e_asu")
+                    edit_remitente = st.text_input("Remitente", value=str(row_e['remitente']), key=f"e_rem_{row_e['id']}")
+                    edit_asunto = st.text_input("Asunto", value=str(row_e['asunto']), key=f"e_asu_{row_e['id']}")
                     idx_tipo = TIPOS_DOC.index(row_e['tipo_documento']) if row_e.get('tipo_documento') in TIPOS_DOC else 0
-                    edit_tipo = st.selectbox("Tipo de documento", TIPOS_DOC, index=idx_tipo, key="e_tip")
-                    edit_mesa = st.text_input("N° de mesa de entrada o referencia", value=str(row_e.get('mesa_entrada') or ''), key="e_mes")
+                    edit_tipo = st.selectbox("Tipo de documento", TIPOS_DOC, index=idx_tipo, key=f"e_tip_{row_e['id']}")
+                    edit_mesa = st.text_input("N° de mesa de entrada o referencia", value=str(row_e.get('mesa_entrada') or ''), key=f"e_mes_{row_e['id']}")
                 with col_e2:
                     idx_area = AREAS_LIST.index(row_e['area_derivada']) if row_e['area_derivada'] in AREAS_LIST else 0
-                    edit_area = st.selectbox("Dirección o área derivada", AREAS_LIST, index=idx_area, key="e_are")
+                    edit_area = st.selectbox("Dirección o área derivada", AREAS_LIST, index=idx_area, key=f"e_are_{row_e['id']}")
                     idx_prio = PRIORIDADES.index(row_e.get('prioridad', 'Normal')) if row_e.get('prioridad') in PRIORIDADES else 0
-                    edit_prioridad = st.radio("Prioridad", PRIORIDADES, index=idx_prio, horizontal=True, key="e_pri")
+                    edit_prioridad = st.radio("Prioridad", PRIORIDADES, index=idx_prio, horizontal=True, key=f"e_pri_{row_e['id']}")
                     f_date = datetime.strptime(str(row_e['fecha_derivacion']), "%Y-%m-%d").date() if isinstance(row_e['fecha_derivacion'], str) else row_e['fecha_derivacion']
-                    edit_fecha = st.date_input("Fecha de derivación", value=f_date, key="e_fec")
-                    idx_resp = RESPONSABLES.index(row_e.get('registrado_por')) if row_e.get('registrado_por') in RESPONSABLES else 0
-                    edit_registrado = st.selectbox("Registrado por", RESPONSABLES, index=idx_resp, key="e_res")
+                    edit_fecha = st.date_input("Fecha de derivación", value=f_date, key=f"e_fec_{row_e['id']}")
+                    resp_opts = list(RESPONSABLES)
+                    if row_e.get('registrado_por') and row_e['registrado_por'] not in resp_opts:
+                        resp_opts.insert(0, row_e['registrado_por'])
+                    idx_resp = resp_opts.index(row_e['registrado_por']) if row_e.get('registrado_por') in resp_opts else 0
+                    edit_registrado = st.selectbox("Registrado por", resp_opts, index=idx_resp, key=f"e_res_{row_e['id']}")
 
-                edit_obs = st.text_area("Observaciones", value=str(row_e['observaciones'] or ''), key="e_obs")
+                edit_obs = st.text_area("Observaciones", value=str(row_e['observaciones'] or ''), key=f"e_obs_{row_e['id']}")
 
                 # Si el trámite está finiquitado, también se puede corregir la fecha de cierre
                 edit_fecha_fin = None
@@ -650,8 +679,8 @@ with tab1:
                     try:
                         f_fin_val = datetime.strptime(str(row_e["fecha_finiquito"]), "%Y-%m-%d").date()
                     except (ValueError, TypeError):
-                        f_fin_val = date.today()
-                    edit_fecha_fin = st.date_input("Fecha de finiquito", value=f_fin_val, key="e_ffin")
+                        f_fin_val = hoy_py()
+                    edit_fecha_fin = st.date_input("Fecha de finiquito", value=f_fin_val, key=f"e_ffin_{row_e['id']}")
 
                 btn_c1, btn_c2, _ = st.columns([1, 1, 3])
                 with btn_c1:
@@ -682,7 +711,7 @@ with tab1:
         marcador = {"EN PLAZO": "🟢", "SEGUIMIENTO": "🟡", "VENCIDO": "🔴", "FINIQUITADO": "✅"}
 
         if df_filtrado.empty:
-            if filtro_area or filtro_estado or filtro_prio:
+            if filtro_area or filtro_estado or filtro_prio or busqueda.strip():
                 st.warning("Ningún trámite coincide con los filtros aplicados.")
             else:
                 st.success("No quedan trámites pendientes. Para revisar los cerrados, elegí FINIQUITADO en el filtro de estado.")
@@ -736,7 +765,7 @@ with tab1:
                         else:
                             if st.button("Finiquitar", key=f"fin_{row['id']}", type="primary", use_container_width=True):
                                 ejecutar("UPDATE correos SET estado = 'FINIQUITADO', fecha_finiquito = :ffin WHERE id = :id",
-                                         {"ffin": date.today(), "id": int(row['id'])})
+                                         {"ffin": hoy_py(), "id": int(row['id'])})
                                 st.rerun()
                         if st.button("Editar", key=f"btn_edit_{row['id']}", use_container_width=True):
                             st.session_state.edit_id = row['id']
@@ -762,8 +791,10 @@ with tab2:
         with col_b:
             area_derivada = st.selectbox("Dirección o área a la que se deriva", AREAS_LIST)
             prioridad = st.radio("Prioridad del trámite", PRIORIDADES, horizontal=True)
-            fecha_derivacion = st.date_input("Fecha de derivación", value=date.today())
-            registrado_por = st.selectbox("Registrado por", RESPONSABLES)
+            fecha_derivacion = st.date_input("Fecha de derivación", value=hoy_py())
+            opciones_reg = ([st.session_state.usuario] + RESPONSABLES
+                            if st.session_state.usuario not in RESPONSABLES else RESPONSABLES)
+            registrado_por = st.selectbox("Registrado por", opciones_reg)
 
         observaciones = st.text_area("Observaciones o instrucciones", placeholder="Indicaciones para el área receptora")
         submitted = st.form_submit_button("Registrar y derivar trámite", type="primary", use_container_width=True)
